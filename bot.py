@@ -5,7 +5,7 @@ from datetime import date
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 
-BOT_TOKEN = "8695463059:AAH44oCa8nbnDGsGMyU6FH1TTQuQjcEdUss"
+BOT_TOKEN = "8695463059:AAFcxESXYcR7QJJ9BRL-yz0ImIvKJrkbWVw"
 
 USERS = {
     7559048140: "Murod",
