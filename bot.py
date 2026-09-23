@@ -1,11 +1,13 @@
 import asyncio
+import os
 import re
 import sqlite3
 from datetime import date
+from aiohttp import web
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 
-BOT_TOKEN = "8695463059:AAFcxESXYcR7QJJ9BRL-yz0ImIvKJrkbWVw"
+BOT_TOKEN = "8695463059:AAH44oCa8nbnDGsGMyU6FH1TTQuQjcEdUss"
 
 USERS = {
     7559048140: "Murod",
@@ -106,7 +108,18 @@ async def money_handler(message: types.Message):
     )
     await message.answer(javob, parse_mode="Markdown")
 
+async def handle_ping(request):
+    return web.Response(text="Seyf bot 24/7 ishlayapti!")
+
 async def main():
+    port = int(os.environ.get("PORT", 10000))
+    app = web.Application()
+    app.router.add_get("/", handle_ping)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
