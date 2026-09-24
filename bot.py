@@ -4,15 +4,17 @@ import re
 import sqlite3
 from datetime import date
 from aiohttp import web
-from aiogram import Bot, Dispatcher, types
+from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-# Sizning bot tokeningiz
-BOT_TOKEN = "8695463059:AAH44oCa8nbnDGsGMyU6FH1TTQuQjcEdUss"
+BOT_TOKEN = "8695463059:AAHQeb0w4OBLc3h8Xezk9IkFMYPPzqRHorY"
 
+# Foydalanuvchilar (Murod - asosiy admin)
+ADMIN_ID = 7559048140
 USERS = {
     7559048140: "Murod",
-    # Do'stingiz ID sini ham keyinchalik shu yerga qo'shishingiz mumkin
+    692189214: "Muhammadali",
 }
 
 conn = sqlite3.connect("seyf.db", check_same_thread=False)
@@ -42,7 +44,7 @@ async def start_handler(message: types.Message):
     name = USERS[message.from_user.id]
     await message.answer(
         f"Assalomu alaykum, {name}!\n\n"
-        f"Kassaga pul solganingizda summani yozing (Masalan: 200.000 yoki 200000).\n\n"
+        f"Kassaga pul solganingizda faqat summani yozing (Masalan: 200.000 yoki 200000).\n\n"
         f"📊 Umumiy hisobot: /xisobot\n"
         f"🔄 Kassani 0 qilish: /tozalash"
     )
@@ -73,14 +75,66 @@ async def report_handler(message: types.Message):
 
 @dp.message(Command("tozalash"))
 async def reset_handler(message: types.Message):
-    if message.from_user.id not in USERS:
+    uid = message.from_user.id
+    if uid not in USERS:
         return
 
-    # Bazadagi hamma yozuvlarni o'chirib, 0 ga tushiramiz
+    # Kassani faqat Murod tozalashi mumkin
+    if uid != ADMIN_ID:
+        await message.answer("❌ Kassani 0 qilish huquqi faqat Murodga berilgan.")
+        return
+
     cursor.execute("DELETE FROM transactions")
     conn.commit()
 
-    await message.answer("🔄 **Seyf muvaffaqiyatli tozalandi!**\nBarcha hisoblar 0 ga tenglashtirildi.")
+    tozalash_xabari = "🔄 **Seyf Murod tomonidan tozalandi!**\nBarcha hisoblar 0 ga tenglashtirildi."
+    for user_id in USERS:
+        try:
+            await bot.send_message(user_id, tozalash_xabari, parse_mode="Markdown")
+        except Exception:
+            pass
+
+@dp.callback_query(F.data.startswith("bekor_"))
+async def cancel_transaction(callback: types.CallbackQuery):
+    tx_id = int(callback.data.split("_")[1])
+    cursor.execute("SELECT user_id, amount FROM transactions WHERE id = ?", (tx_id,))
+    row = cursor.fetchone()
+
+    if not row:
+        await callback.answer("Bu amal allaqachon bekor qilingan yoki topilmadi.", show_alert=True)
+        return
+
+    tx_user_id, amount = row
+    if callback.from_user.id != tx_user_id and callback.from_user.id != ADMIN_ID:
+        await callback.answer("Faqat o'zingiz kiritgan summani bekor qila olasiz!", show_alert=True)
+        return
+
+    cursor.execute("DELETE FROM transactions WHERE id = ?", (tx_id,))
+    conn.commit()
+
+    cursor.execute("SELECT SUM(amount) FROM transactions")
+    seyf_total = cursor.fetchone()[0] or 0
+
+    sender_name = USERS[tx_user_id]
+    await callback.message.edit_text(
+        f"❌ **Xato summa bekor qilindi:** -{format_money(amount)} so'm\n\n"
+        f"🔒 **Seyfdagi yangilangan summa:** {format_money(seyf_total)} so'm",
+        parse_mode="Markdown"
+    )
+
+    # Sherikka xato to'g'rilangani haqida xabar borishi
+    for other_id in USERS:
+        if other_id != callback.from_user.id:
+            try:
+                await bot.send_message(
+                    other_id,
+                    f"⚠️ **{sender_name} adashib kiritgan summani bekor qildi:** -{format_money(amount)} so'm\n"
+                    f"🔒 **Seyfda qolgan summa:** {format_money(seyf_total)} so'm",
+                    parse_mode="Markdown"
+                )
+            except Exception:
+                pass
+    await callback.answer("Summa muvaffaqiyatli bekor qilindi!")
 
 @dp.message()
 async def money_handler(message: types.Message):
@@ -88,21 +142,27 @@ async def money_handler(message: types.Message):
     if uid not in USERS:
         return
 
-    cleaned_text = re.sub(r"[^\d]", "", message.text)
-    if not cleaned_text:
-        await message.answer("Iltimos, summani faqat raqamlarda yozing.")
+    raw_text = message.text.strip() if message.text else ""
+
+    # Agar matnda umuman raqam bo'lmasa yoki faqat harflar yozilgan bo'lsa
+    cleaned_digits = re.sub(r"[^\d]", "", raw_text)
+    allowed_format = bool(re.match(r"^[\d\s.,]+$", raw_text))
+
+    if not cleaned_digits or not allowed_format:
+        await message.answer("⚠️ **Bu botga faqat summa yozing!**\n(Masalan: 200000 yoki 50.000)", parse_mode="Markdown")
         return
 
-    amount = int(cleaned_text)
+    amount = int(cleaned_digits)
     if amount <= 0:
-        await message.answer("Summa 0 dan katta bo'lishi kerak.")
+        await message.answer("⚠️ Summa 0 dan katta bo'lishi kerak.")
         return
 
     today = date.today().isoformat()
-    name = USERS[uid]
+    sender_name = USERS[uid]
 
     cursor.execute("INSERT INTO transactions (user_id, amount, date) VALUES (?, ?, ?)", (uid, amount, today))
     conn.commit()
+    tx_id = cursor.lastrowid
 
     cursor.execute("SELECT SUM(amount) FROM transactions WHERE user_id = ? AND date = ?", (uid, today))
     today_total = cursor.fetchone()[0] or 0
@@ -113,17 +173,38 @@ async def money_handler(message: types.Message):
     cursor.execute("SELECT SUM(amount) FROM transactions")
     seyf_total = cursor.fetchone()[0] or 0
 
-    javob = (
+    # Adashib kiritilsa, bekor qilish tugmasi
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="↩️ Adashdim (Bekor qilish)", callback_data=f"bekor_{tx_id}")]
+    ])
+
+    # Kiritgan shaxsga javob
+    javob_egasi = (
         f"✅ **Seyfga qo'shildi:** +{format_money(amount)} so'm\n\n"
-        f"👤 **{name}:**\n"
+        f"👤 **{sender_name}:**\n"
         f"• Bugun tashlaganingiz: {format_money(today_total)} so'm\n"
         f"• Shu paytgacha jami: {format_money(user_total)} so'm\n\n"
         f"🔒 **Seyfdagi umumiy summa:** {format_money(seyf_total)} so'm"
     )
-    await message.answer(javob, parse_mode="Markdown")
+    await message.answer(javob_egasi, reply_markup=keyboard, parse_mode="Markdown")
+
+    # Sherikka avtomatik boradigan xabar
+    sherik_xabari = (
+        f"🔔 **{sender_name} seyfga pul qo'shdi:** +{format_money(amount)} so'm\n\n"
+        f"👤 **{sender_name} hisobi:**\n"
+        f"• Bugun: {format_money(today_total)} so'm\n"
+        f"• Jami: {format_money(user_total)} so'm\n\n"
+        f"🔒 **Seyfdagi jami jamg'arma:** {format_money(seyf_total)} so'm"
+    )
+    for other_id in USERS:
+        if other_id != uid:
+            try:
+                await bot.send_message(other_id, sherik_xabari, parse_mode="Markdown")
+            except Exception:
+                pass
 
 async def handle_ping(request):
-    return web.Response(text="Seyf bot 24/7 ishlayapti!")
+    return web.Response(text="Bot faol ishlamoqda!")
 
 async def main():
     port = int(os.environ.get("PORT", 10000))
