@@ -2,7 +2,8 @@ import asyncio
 import os
 import re
 import sqlite3
-from datetime import date
+from datetime import datetime
+import pytz
 from aiohttp import web
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
@@ -19,6 +20,8 @@ USERS = {
     692189214: "Muhammadali",
 }
 
+tashkent_tz = pytz.timezone("Asia/Tashkent")
+
 conn = sqlite3.connect("seyf.db", check_same_thread=False)
 cursor = conn.cursor()
 
@@ -27,10 +30,17 @@ CREATE TABLE IF NOT EXISTS transactions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER,
     amount INTEGER,
-    date TEXT
+    date TEXT,
+    created_at TEXT
 )
 """)
 conn.commit()
+
+try:
+    cursor.execute("ALTER TABLE transactions ADD COLUMN created_at TEXT")
+    conn.commit()
+except Exception:
+    pass
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
@@ -62,6 +72,7 @@ async def start_handler(message: types.Message):
         f"Assalomu alaykum, {name}!\n\n"
         f"Kassaga pul solganingizda faqat summani yozing (Masalan: 200.000 yoki 200000).\n\n"
         f"📊 Umumiy hisobot: /xisobot\n"
+        f"🕒 Oxirgi 5 ta amal: /tarix\n"
         f"🔄 Kassani 0 qilish: /tozalash"
     )
 
@@ -70,7 +81,7 @@ async def report_handler(message: types.Message):
     if message.from_user.id not in USERS:
         return
 
-    today = date.today().isoformat()
+    today = datetime.now(tashkent_tz).strftime("%Y-%m-%d")
     text = "📊 **Seyfdagi umumiy holat:**\n\n"
     total_seyf = 0
 
@@ -88,6 +99,26 @@ async def report_handler(message: types.Message):
 
     progress_text = generate_progress_bar(total_seyf, TARGET_GOAL)
     text += f"{progress_text}"
+    await message.answer(text, parse_mode="Markdown")
+
+@dp.message(Command("tarix"))
+async def history_handler(message: types.Message):
+    if message.from_user.id not in USERS:
+        return
+
+    cursor.execute("SELECT user_id, amount, created_at, date FROM transactions ORDER BY id DESC LIMIT 5")
+    rows = cursor.fetchall()
+
+    if not rows:
+        await message.answer("ℹ️ Hozircha seyfga hech qanday pul kiritilmagan.")
+        return
+
+    text = "🕒 **Oxirgi 5 ta amal:**\n\n"
+    for idx, (uid, amount, created_at, tx_date) in enumerate(rows, 1):
+        user_name = USERS.get(uid, "Noma'lum")
+        time_str = created_at if created_at else tx_date
+        text += f"{idx}. **{user_name}**: +{format_money(amount)} so'm `({time_str})`\n"
+
     await message.answer(text, parse_mode="Markdown")
 
 @dp.message(Command("tozalash"))
@@ -163,7 +194,7 @@ async def money_handler(message: types.Message):
     allowed_format = bool(re.match(r"^[\d\s.,]+$", raw_text))
 
     if not cleaned_digits or not allowed_format:
-        await message.answer("⚠️ **Bu botga faqat summa yozing!**\n(Masalan: 200000 yoki 50.000)", parse_mode="Markdown")
+        await message.answer("⚠️ **Bu botga faqat summa yozing!**\n(Masalan: 200000 yoki 50.000)\n\n📊 Hisobot: /xisobot\n🕒 Tarix: /tarix", parse_mode="Markdown")
         return
 
     amount = int(cleaned_digits)
@@ -171,10 +202,15 @@ async def money_handler(message: types.Message):
         await message.answer("⚠️ Summa 0 dan katta bo'lishi kerak.")
         return
 
-    today = date.today().isoformat()
+    now_tashkent = datetime.now(tashkent_tz)
+    today = now_tashkent.strftime("%Y-%m-%d")
+    created_at = now_tashkent.strftime("%d.%m.%Y, %H:%M")
     sender_name = USERS[uid]
 
-    cursor.execute("INSERT INTO transactions (user_id, amount, date) VALUES (?, ?, ?)", (uid, amount, today))
+    cursor.execute(
+        "INSERT INTO transactions (user_id, amount, date, created_at) VALUES (?, ?, ?, ?)",
+        (uid, amount, today, created_at)
+    )
     conn.commit()
     tx_id = cursor.lastrowid
 
@@ -193,12 +229,15 @@ async def money_handler(message: types.Message):
         [InlineKeyboardButton(text="↩️ Adashdim (Bekor qilish)", callback_data=f"bekor_{tx_id}")]
     ])
 
+    duo_matni = "\n\n🤲 _Alloh maqsadimizga erishishda O'zing ko'makchi bo'l, topganimizga baraka ber!_"
+
     javob_egasi = (
         f"✅ **Seyfga qo'shildi:** +{format_money(amount)} so'm\n\n"
         f"👤 **{sender_name}:**\n"
         f"• Bugun tashlaganingiz: {format_money(today_total)} so'm\n"
         f"• Shu paytgacha jami: {format_money(user_total)} so'm\n\n"
         f"{progress_text}"
+        f"{duo_matni}"
     )
     await message.answer(javob_egasi, reply_markup=keyboard, parse_mode="Markdown")
 
@@ -208,6 +247,7 @@ async def money_handler(message: types.Message):
         f"• Bugun: {format_money(today_total)} so'm\n"
         f"• Jami: {format_money(user_total)} so'm\n\n"
         f"{progress_text}"
+        f"{duo_matni}"
     )
     for other_id in USERS:
         if other_id != uid:
@@ -216,25 +256,60 @@ async def money_handler(message: types.Message):
             except Exception:
                 pass
 
-# Serverni uyg'oq saqlash uchun oddiy ping manzili
 async def handle_ping(request):
     return web.Response(text="Bot faol ishlamoqda!")
 
-# Cron-job orqali ertalab 09:00 da chaqiriladigan manzil
+# Ertalabki soat 09:00 xabari
 async def handle_morning_reminder(request):
-    for uid, name in USERS.items():
-        msg = f"🌅 **Salom {name}, yangi do'konga pul yig'ish kerak bugun seyfga pul tashlang!**"
+    morning_msg = (
+        "🔥 **Murod, Muhammadali, la'nati joyingdan turda bugun pul ishla! "
+        "Nima qilyapsan axir, tur la'natilar! Umring o'tib ketyapti jin ursin noshudlar!**"
+    )
+    for uid in USERS:
+        try:
+            await bot.send_message(uid, morning_msg, parse_mode="Markdown")
+        except Exception:
+            pass
+    return web.Response(text="Ertalabki daxshatli xabar yuborildi!")
+
+# Kechki soat 21:00 xabari
+async def handle_evening_summary(request):
+    today = datetime.now(tashkent_tz).strftime("%Y-%m-%d")
+    
+    cursor.execute("SELECT SUM(amount) FROM transactions WHERE date = ?", (today,))
+    today_total = cursor.fetchone()[0] or 0
+
+    cursor.execute("SELECT SUM(amount) FROM transactions")
+    seyf_total = cursor.fetchone()[0] or 0
+    progress_text = generate_progress_bar(seyf_total, TARGET_GOAL)
+
+    if today_total > 0:
+        msg = (
+            f"🌙 **Murod, Muhammadali!** Bugun seyfga bor-yo'g'i **{format_money(today_total)} so'm** qo'shildi.\n"
+            f"Bo'laqol la'nati, 350 000 000 ni qachon yig'asan?! ⚡️\n\n"
+            f"{progress_text}"
+        )
+    else:
+        msg = (
+            f"🤬 **Murod! Muhammadali!** Bugun seyfga bir tiyin ham tashlamadinglar, qayerda tentirab yuribsizlar?! "
+            f"Yangi do'konni kim ochadi, la'natilar?! Ertaga pul bo'lsin!\n\n"
+            f"{progress_text}"
+        )
+
+    for uid in USERS:
         try:
             await bot.send_message(uid, msg, parse_mode="Markdown")
         except Exception:
             pass
-    return web.Response(text="Eslatmalar yuborildi!")
+
+    return web.Response(text="Kechki daxshatli xabar yuborildi!")
 
 async def main():
     port = int(os.environ.get("PORT", 10000))
     app = web.Application()
     app.router.add_get("/", handle_ping)
     app.router.add_get("/morning-reminder", handle_morning_reminder)
+    app.router.add_get("/evening-summary", handle_evening_summary)
     
     runner = web.AppRunner(app)
     await runner.setup()
