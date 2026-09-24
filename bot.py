@@ -7,13 +7,12 @@ from aiohttp import web
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 
-# Yangi token
-BOT_TOKEN = "8695463059:AAFcxESXYcR7QJJ9BRL-yz0ImIvKJrkbWVw"
+# Sizning bot tokeningiz
+BOT_TOKEN = "8695463059:AAH44oCa8nbnDGsGMyU6FH1TTQuQjcEdUss"
 
-# Kassa egalari (Siz va Muhammadali)
 USERS = {
     7559048140: "Murod",
-    692189214: "Muhammadali",
+    # Do'stingiz ID sini ham keyinchalik shu yerga qo'shishingiz mumkin
 }
 
 conn = sqlite3.connect("seyf.db", check_same_thread=False)
@@ -77,6 +76,7 @@ async def reset_handler(message: types.Message):
     if message.from_user.id not in USERS:
         return
 
+    # Bazadagi hamma yozuvlarni o'chirib, 0 ga tushiramiz
     cursor.execute("DELETE FROM transactions")
     conn.commit()
 
