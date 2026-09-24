@@ -7,10 +7,13 @@ from aiohttp import web
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 
+# Yangi token
 BOT_TOKEN = "8695463059:AAFcxESXYcR7QJJ9BRL-yz0ImIvKJrkbWVw"
 
+# Kassa egalari (Siz va Muhammadali)
 USERS = {
     7559048140: "Murod",
+    692189214: "Muhammadali",
 }
 
 conn = sqlite3.connect("seyf.db", check_same_thread=False)
@@ -40,8 +43,9 @@ async def start_handler(message: types.Message):
     name = USERS[message.from_user.id]
     await message.answer(
         f"Assalomu alaykum, {name}!\n\n"
-        f"Kassaga pul solganingizda summani yozing (Masalan: 200.000 yoki 200000).\n"
-        f"Umumiy hisobotni ko'rish uchun: /xisobot"
+        f"Kassaga pul solganingizda summani yozing (Masalan: 200.000 yoki 200000).\n\n"
+        f"📊 Umumiy hisobot: /xisobot\n"
+        f"🔄 Kassani 0 qilish: /tozalash"
     )
 
 @dp.message(Command("xisobot"))
@@ -67,6 +71,16 @@ async def report_handler(message: types.Message):
 
     text += f"🔒 **Seyfdagi jami jamg'arma:** {format_money(total_seyf)} so'm"
     await message.answer(text, parse_mode="Markdown")
+
+@dp.message(Command("tozalash"))
+async def reset_handler(message: types.Message):
+    if message.from_user.id not in USERS:
+        return
+
+    cursor.execute("DELETE FROM transactions")
+    conn.commit()
+
+    await message.answer("🔄 **Seyf muvaffaqiyatli tozalandi!**\nBarcha hisoblar 0 ga tenglashtirildi.")
 
 @dp.message()
 async def money_handler(message: types.Message):
