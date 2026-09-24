@@ -2,8 +2,7 @@ import asyncio
 import os
 import re
 import sqlite3
-from datetime import datetime, date
-import pytz
+from datetime import date
 from aiohttp import web
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
@@ -87,7 +86,6 @@ async def report_handler(message: types.Message):
         text += f"   • Bugun: {format_money(today_user)} so'm\n"
         text += f"   • Jami: {format_money(total_user)} so'm\n\n"
 
-    # Diagramma va maqsad holati
     progress_text = generate_progress_bar(total_seyf, TARGET_GOAL)
     text += f"{progress_text}"
     await message.answer(text, parse_mode="Markdown")
@@ -218,39 +216,30 @@ async def money_handler(message: types.Message):
             except Exception:
                 pass
 
-async def morning_reminder_task():
-    tashkent_tz = pytz.timezone("Asia/Tashkent")
-    already_sent_today = False
-
-    while True:
-        now = datetime.now(tashkent_tz)
-        if now.hour == 9 and not already_sent_today:
-            for uid, name in USERS.items():
-                msg = f"🌅 **Salom {name}, yangi do'konga pul yig'ish kerak bugun seyfga pul tashlang!**"
-                try:
-                    await bot.send_message(uid, msg, parse_mode="Markdown")
-                except Exception:
-                    pass
-            already_sent_today = True
-
-        if now.hour == 0:
-            already_sent_today = False
-
-        await asyncio.sleep(60)
-
+# Serverni uyg'oq saqlash uchun oddiy ping manzili
 async def handle_ping(request):
     return web.Response(text="Bot faol ishlamoqda!")
+
+# Cron-job orqali ertalab 09:00 da chaqiriladigan manzil
+async def handle_morning_reminder(request):
+    for uid, name in USERS.items():
+        msg = f"🌅 **Salom {name}, yangi do'konga pul yig'ish kerak bugun seyfga pul tashlang!**"
+        try:
+            await bot.send_message(uid, msg, parse_mode="Markdown")
+        except Exception:
+            pass
+    return web.Response(text="Eslatmalar yuborildi!")
 
 async def main():
     port = int(os.environ.get("PORT", 10000))
     app = web.Application()
     app.router.add_get("/", handle_ping)
+    app.router.add_get("/morning-reminder", handle_morning_reminder)
+    
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-
-    asyncio.create_task(morning_reminder_task())
 
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
